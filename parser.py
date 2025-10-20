@@ -9,37 +9,6 @@ from config import BASE_URL, FORBIDDEN_PATHS, METADATA_DIR, PROCESSED_DIR
 from object_types import METADATA, PLAYER_DATA
 
 
-
-def find_list_of_list_of_players_url(html: str) -> str | None:
-    pattern = r'<a\s+href="([^"]*)"[^>]*>Players</a>'
-    match = re.search(pattern, html)
-
-    if match:
-        return match.group(1)
-
-    return None
-
-def find_list_of_players_urls(html: str, players_url: str) -> List[str] | None:
-    pattern = r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a\s*>'
-    matches = re.findall(pattern, html, re.IGNORECASE | re.DOTALL)
-
-    result: List[str] = []
-    for href, content in matches:
-        if not href.startswith(players_url + '/'):
-            continue
-        suffix = href[len(players_url) + 1:].strip('/')
-        text = re.sub(r'<.*?>', '', content).strip()
-        if suffix.lower() == text.lower():
-            result.append(href)
-    
-    return result
-
-
-def find_players_urls(html: str):
-    pattern = r'<a\s+href="(/players/[a-z]/[^"]+0[1-9]\.html)"[^>]*>([^<]+)</a>'
-    return re.findall(pattern, html)
-
-
 def get_hrefs(html: str) -> List[str]:
     href_pattern = re.compile(
         rf'href=["\']((?:{re.escape(BASE_URL)}/(?!/)|/(?!/))[^"\']*)["\']',
@@ -99,8 +68,9 @@ def process_file(relative_url: str, file_path: str) -> Optional[PLAYER_DATA]:
     }
 
     name_match = re.search(r"<p>\s*<strong>\s*Full Name:\s*</strong>\s*([^<]+)\s*</p>", html)
-    if name_match:
-        data["player_name"] = name_match.group(1).strip()
+    if name_match is None:
+        return None
+    data["player_name"] = name_match.group(1).strip()
 
     pos_shoots_match = re.search(
         r"<p>\s*<strong>\s*Position\s*</strong>\s*:\s*([^<]+?)&nbsp;.*?<strong>\s*Shoots\s*</strong>\s*:\s*([^<]+)",
@@ -154,7 +124,7 @@ def process_file(relative_url: str, file_path: str) -> Optional[PLAYER_DATA]:
 
 
 def parse_downloaded_stuff(count_files: int | None = None):
-    file_path = os.path.join(METADATA_DIR, 'players', 'a.tsv')
+    file_path = os.path.join(METADATA_DIR, 'all_metadata.tsv')
     with open(file_path, 'r', encoding='UTF-8') as infile:
         reader = csv.DictReader(infile, delimiter='\t')
         players_data: List[PLAYER_DATA] = []
