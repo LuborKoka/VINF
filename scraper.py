@@ -1,7 +1,7 @@
 import requests
 import os
 import csv
-from typing import Any, Dict, List, cast
+from typing import Any, Dict, List, Set, cast
 from datetime import date
 import random
 import time
@@ -69,13 +69,14 @@ def fetch_file(relative_url: str, downloaded_urls: Dict[str, str], writer: Any) 
         outfile.write(response.text)
         write_metadata(writer, metadata, False)
         print(f'{relative_url} downloaded')
+        sleep()
 
     return response.text
 
 
-def push_to_stack(stack: List[str], urls: List[str], downloaded: Dict[str, str]):
+def push_to_stack(stack: List[str], urls: List[str], visited: Set[str]):
     for url in urls:
-        if url in downloaded:
+        if url in visited:
             continue
 
         stack.append(url)
@@ -83,14 +84,16 @@ def push_to_stack(stack: List[str], urls: List[str], downloaded: Dict[str, str])
 
 def run_scraper() -> None:
     stack = ['/']
+    session_visited_urls: Set[str] = set()
     downloaded_urls = read_metadata()
 
     with open(os.path.join(METADATA_DIR, 'all_metadata.tsv'), 'a', encoding='UTF-8') as mtdt:
         writer = csv.writer(mtdt, delimiter='\t')
         while len(stack) > 0:
             next_url = stack.pop()
+            session_visited_urls.add(next_url)
             html = fetch_file(next_url, downloaded_urls, writer)
             urls = get_hrefs(html)
-            push_to_stack(stack, urls, downloaded_urls)
+            push_to_stack(stack, urls, session_visited_urls)
 
     

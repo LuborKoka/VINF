@@ -15,11 +15,11 @@ HEADERS = {
 FORBIDDEN_PATHS = [
     "/hockey/",
     "/play-index/*cgi",
-    "*/scoring/",
-    "*/gamelog/",
-    "*/splits/",
+    "/scoring/",
+    "/gamelog/",
+    "/splits/",
     "/player_search.cgi",
-    "/boxscores/index*",
+    "/boxscores/index",
     "/my/",
     "/7103",
     "/req/",
@@ -29,10 +29,7 @@ FORBIDDEN_PATHS = [
 
 SCRAPE_DIR = ".\\scraped"
 
-LIST_DIR = os.path.join(SCRAPE_DIR, 'players_urls')
 HTML_DIR = os.path.join(SCRAPE_DIR, 'players')
-
-
 
 METADATA_DIR = ".\\metadata"
 
