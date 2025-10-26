@@ -89,12 +89,104 @@ class SimpleIDFScorer:
     
     def supports_block_quality(self):
         return False
+    
 
+class ProbabilisticIDF(WeightingModel):
+    """
+    Probabilistic IDF weighting model (inspired by BM25).
+    
+    How it works:
+    - Uses probability theory to calculate relevance
+    - Balances term frequency with document length
+    - Prevents very long documents from dominating results
+    
+    Formula: IDF = log((total_docs - docs_with_term + 0.5) / (docs_with_term + 0.5))
+    
+    This gives higher weight to rare terms but handles edge cases better.
+    When a term appears in almost all documents, it can even get negative scores
+    (meaning it's so common it's actually a negative signal).
+    """
+    
+    def __init__(self, k1=1.5, b=0.75):
+        """
+        Args:
+            k1: Controls term frequency saturation (1.2-2.0 typical)
+                Higher = term frequency matters more
+            b: Controls document length normalization (0-1)
+               0 = ignore length, 1 = full length penalty
+        """
+        self.k1 = k1
+        self.b = b
+    
+    def scorer(self, searcher, fieldname, text, qf=1):
+        # Get document frequency stats
+        total_docs = searcher.doc_count_all()
+        docs_with_term = searcher.doc_frequency(fieldname, text)
+        
+        # Probabilistic IDF formula
+        if docs_with_term == 0:
+            idf = 0.0
+        else:
+            # This can be negative for very common terms (which is intentional)
+            idf = math.log((total_docs - docs_with_term + 0.5) / (docs_with_term + 0.5))
+        
+        # Get average document length for normalization
+        avg_doc_length = searcher.avg_field_length(fieldname) or 1.0
+        
+        return ProbabilisticIDFScorer(idf, qf, self.k1, self.b, avg_doc_length)
+
+class ProbabilisticIDFScorer:
+    """
+    Scorer for probabilistic IDF model.
+    """
+    
+    def __init__(self, idf, qf, k1, b, avg_doc_length):
+        self.idf = idf
+        self.qf = qf
+        self.k1 = k1
+        self.b = b
+        self.avg_doc_length = avg_doc_length or 1.0
+    
+    def score(self, matcher):
+        # Get term frequency
+        tf = matcher.weight()
+        
+        # For simplicity, we'll use average document length for normalization
+        # In a more complex implementation, you'd store actual doc lengths
+        doc_length = self.avg_doc_length
+        
+        # Normalize document length
+        length_norm = 1 - self.b + self.b * (doc_length / self.avg_doc_length)
+        
+        # BM25-style term frequency saturation
+        # This prevents documents with many repetitions from dominating
+        tf_component = (tf * (self.k1 + 1)) / (tf + self.k1 * length_norm)
+        
+        # Final score
+        score = self.idf * tf_component * self.qf
+        
+        return max(0.0, score)  # Ensure non-negative scores
+    
+    def max_quality(self):
+        # Maximum when TF is very high
+        max_tf = 100.0
+        tf_component = (max_tf * (self.k1 + 1)) / (max_tf + self.k1)
+        return max(0.0, self.idf * tf_component * self.qf)
+    
+    def supports_block_quality(self):
+        return False
 
 if __name__ == '__main__':
     ix = load_index()
+    with ix.searcher(weighting=ProbabilisticIDF()) as searcher:
+        query = QueryParser("player_name", ix.schema).parse("john OR harry")
+        results = searcher.search(query, limit=10)
+        
+        for hit in results:
+            print(f"{hit['player_name']}: {hit.score}")
+
     with ix.searcher(weighting=SimpleIDF()) as searcher:
-        query = QueryParser("player_name", ix.schema).parse("john OR james OR peter")
+        query = QueryParser("player_name", ix.schema).parse("john OR harry")
         results = searcher.search(query, limit=10)
         
         for hit in results:
