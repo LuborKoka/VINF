@@ -1,193 +1,151 @@
-# type: ignore
-from indexer import load_index
-import math
-from whoosh.scoring import WeightingModel
-from whoosh.qparser import QueryParser, MultifieldParser
+import os
+import csv
+from typing import Dict, Optional, List, Set, Tuple, Union, cast
+from object_types import INDEX, PLAYER_DATA
+from config import PROCESSED_DIR
+import bisect
+
+class Index:
+    def __init__(self) -> None:
+        self.text_fields = ['player_name', 'dob', 'position', 'draft_team', 'hand']
+        self.skip_fields = ['id', 'file_path', 'download_url']
+        self.numeric_fields = ['height', 'weight', 'games_played', 'wins', 'losses', 
+                      'ties_ot_losses', 'minutes', 'shootouts', 'gaa', 
+                      'save_percentage', 'goals', 'assists', 'points', 
+                      'plus_minus', 'point_shares', 'penalty_minutes', 
+                      'shots_on_goal', 'game_winning_goals']
+
+        self.data: List[PLAYER_DATA] = []
+
+        self.index: INDEX = {
+            "player_name": {},
+            "dob": {},
+            "draft_team": {},
+            "position": {},
+            "hand": {},
+            "height": None,
+            "weight": None,
+            "games_played": None,
+            "wins": None,
+            "losses": None,
+            "ties_ot_losses": None,
+            "minutes": None,
+            "shootouts": None,
+            "gaa": None,
+            "save_percentage": None,
+            "goals": None,
+            "assists": None,
+            "points": None,
+            "plus_minus": None,
+            "point_shares": None,
+            "penalty_minutes": None,
+            "shots_on_goal": None,
+            "game_winning_goals": None,
+        }
+
+    @staticmethod
+    def _safe_int(val: str) -> Optional[int]:
+        return int(val) if val else None
+
+    @staticmethod
+    def _safe_float(val: str) -> Optional[float]:
+        return float(val) if val else None
 
 
-class SimpleIDF(WeightingModel):
-    """
-    A simple custom IDF (Inverse Document Frequency) weighting model.
-    
-    How it works:
-    - IDF measures how rare/unique a term is across all documents
-    - Rare terms get higher scores (more discriminative)
-    - Common terms get lower scores (less useful for distinguishing documents)
-    
-    Formula: IDF = log(total_docs / docs_with_term)
-    
-    Example:
-    - If "hockey" appears in 900 out of 1000 docs: IDF = log(1000/900) = 0.05
-    - If "Gretzky" appears in 10 out of 1000 docs: IDF = log(1000/10) = 2.0
-    """
-    
-    def scorer(self, searcher, fieldname, text, qf=1):
-        """
-        Returns a scorer object for this weighting model.
-        
-        Args:
-            searcher: The searcher object
-            fieldname: The field being searched
-            text: The search term
-            qf: Query frequency (how many times term appears in query)
-        """
-        # Get document frequency stats
-        total_docs = searcher.doc_count_all()  # Total number of documents
-        docs_with_term = searcher.doc_frequency(fieldname, text)  # Docs containing this term
-        
-        # Calculate IDF
-        if docs_with_term == 0:
-            idf = 0.0
-        else:
-            # Add 1 to avoid division by zero and smooth the score
-            idf = math.log((total_docs + 1) / (docs_with_term + 1))
-        
-        return SimpleIDFScorer(idf, qf)
+    def load_tsv(self):
+        tsv_path = os.path.join(PROCESSED_DIR, 'data_with_id.tsv')
+
+        with open(tsv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f, delimiter='\t')
+            for row in reader:
+                player_dict: PLAYER_DATA = {
+                    # Non-Optional fields
+                    #'id': int(row['id']),
+                    'file_path': row['file_path'],
+                    'download_url': row['download_url'],
+                    'player_name': row['player_name'],
+                    'dob': row.get('dob', ''),
+                    'position': row.get('position', ''),
+                    'hand': row.get('hand', ''),
 
 
-class SimpleIDFScorer:
-    """
-    The scorer that actually calculates document scores.
-    """
-    
-    def __init__(self, idf, qf):
-        """
-        Args:
-            idf: The IDF value for this term
-            qf: Query frequency
-        """
-        self.idf = idf
-        self.qf = qf  # Query frequency (boost if term appears multiple times in query)
-    
-    def score(self, matcher):
-        """
-        Calculate the score for a document.
-        
-        Args:
-            matcher: Contains info about the current document match
-        """
-        # Get term frequency in this document
-        tf = matcher.weight()  # How many times term appears in this document
-        
-        # Simple scoring: TF * IDF * Query Frequency
-        # - More occurrences in doc = higher score (TF)
-        # - Rarer term overall = higher score (IDF)
-        # - Term repeated in query = higher boost (QF)
-        score = tf * self.idf * self.qf
-        
-        return score
-    
-    def max_quality(self):
-        """
-        Returns the maximum possible score for this term.
-        Required for OR queries to work properly.
-        """
-        # Maximum quality is when TF is at its highest
-        # We assume max TF could be around 10 (a term appearing 10 times in a doc)
-        # You can adjust this if needed
-        return 10.0 * self.idf * self.qf
-    
-    def supports_block_quality(self):
-        return False
-    
+                    'draft_team': row.get('draft_team', '') ,
 
-class ProbabilisticIDF(WeightingModel):
-    """
-    Probabilistic IDF weighting model (inspired by BM25).
-    
-    How it works:
-    - Uses probability theory to calculate relevance
-    - Balances term frequency with document length
-    - Prevents very long documents from dominating results
-    
-    Formula: IDF = log((total_docs - docs_with_term + 0.5) / (docs_with_term + 0.5))
-    
-    This gives higher weight to rare terms but handles edge cases better.
-    When a term appears in almost all documents, it can even get negative scores
-    (meaning it's so common it's actually a negative signal).
-    """
-    
-    def __init__(self, k1=1.5, b=0.75):
-        """
-        Args:
-            k1: Controls term frequency saturation (1.2-2.0 typical)
-                Higher = term frequency matters more
-            b: Controls document length normalization (0-1)
-               0 = ignore length, 1 = full length penalty
-        """
-        self.k1 = k1
-        self.b = b
-    
-    def scorer(self, searcher, fieldname, text, qf=1):
-        # Get document frequency stats
-        total_docs = searcher.doc_count_all()
-        docs_with_term = searcher.doc_frequency(fieldname, text)
-        
-        # Probabilistic IDF formula
-        if docs_with_term == 0:
-            idf = 0.0
-        else:
-            # This can be negative for very common terms (which is intentional)
-            idf = math.log((total_docs - docs_with_term + 0.5) / (docs_with_term + 0.5))
-        
-        # Get average document length for normalization
-        avg_doc_length = searcher.avg_field_length(fieldname) or 1.0
-        
-        return ProbabilisticIDFScorer(idf, qf, self.k1, self.b, avg_doc_length)
+                    'height': self._safe_int(row['height']),
+                    'weight': self._safe_int(row['weight']),
+                    'games_played': self._safe_int(row['games_played']),
+                    'wins': self._safe_int(row['wins']),
+                    'losses': self._safe_int(row['losses']),
+                    'ties_ot_losses': self._safe_int(row['ties_ot_losses']),
+                    'minutes': self._safe_int(row['minutes']),
+                    'goals': self._safe_int(row['goals']),
+                    'assists': self._safe_int(row['assists']),
+                    'points': self._safe_int(row['points']),
+                    'plus_minus': self._safe_int(row['plus_minus']),
+                    'penalty_minutes': self._safe_int(row['penalty_minutes']),
+                    'shots_on_goal': self._safe_int(row['shots_on_goal']),
+                    'game_winning_goals': self._safe_int(row['game_winning_goals']),
 
-class ProbabilisticIDFScorer:
-    """
-    Scorer for probabilistic IDF model.
-    """
-    
-    def __init__(self, idf, qf, k1, b, avg_doc_length):
-        self.idf = idf
-        self.qf = qf
-        self.k1 = k1
-        self.b = b
-        self.avg_doc_length = avg_doc_length or 1.0
-    
-    def score(self, matcher):
-        # Get term frequency
-        tf = matcher.weight()
+                    'shootouts': self._safe_float(row['shootouts']),
+                    'gaa': self._safe_float(row['gaa']),
+                    'save_percentage': self._safe_float(row['save_percentage']),
+                    'point_shares': self._safe_float(row['point_shares']),
+                }
+                self.data.append(player_dict)
+
+    def make_index(self) -> INDEX:
+        for i, row in enumerate(self.data):
+            self.extend_index(row, i)
+
+        for field in self.numeric_fields:
+            values: List[Tuple[Union[int, float], int]] = [
+                (cast(Union[int, float], row[field]), i) 
+                for i, row in enumerate(self.data) 
+                if row[field] is not None
+            ]
+            self.index[field] = sorted(values, key=lambda x: x[0])
+        return self.index
         
-        # For simplicity, we'll use average document length for normalization
-        # In a more complex implementation, you'd store actual doc lengths
-        doc_length = self.avg_doc_length
+    def extend_index(self, row: PLAYER_DATA, id: int):
+        for key in self.text_fields:
+            if key in row:
+                value = cast(str | None, row[key])
+                if isinstance(value, str):
+                    data: str = value
+                    tokens = data.lower().strip().split(' ')
+                    for token in tokens:
+                        index_dict = cast(Dict[str, Set[int]], self.index[key])
+                        if token in index_dict:
+                            index_dict[token].add(id)
+                        else:
+                            index_dict[token] = set([id])
+                
+
+    def search_numeric_range(self, field: str, min_val: Optional[Union[int, float]]=None, max_val: Optional[Union[int, float]]=None) -> Set[int]:
+        """Search for values in range [min_val, max_val]"""
+        if self.index[field] is None:
+            return set()
+
+        sorted_list: List[Tuple[Union[int, float], int]] = cast(
+            List[Tuple[Union[int, float], int]], 
+            self.index[field]
+        )
+        result: Set[int] = set()
         
-        # Normalize document length
-        length_norm = 1 - self.b + self.b * (doc_length / self.avg_doc_length)
+        start_idx = bisect.bisect_left(sorted_list, (min_val, 0)) if min_val is not None else 0
+        end_idx = bisect.bisect_right(sorted_list, (max_val, float('inf'))) if max_val is not None else len(sorted_list)
         
-        # BM25-style term frequency saturation
-        # This prevents documents with many repetitions from dominating
-        tf_component = (tf * (self.k1 + 1)) / (tf + self.k1 * length_norm)
+        for _, idx in sorted_list[start_idx:end_idx]:
+            result.add(idx)
         
-        # Final score
-        score = self.idf * tf_component * self.qf
-        
-        return max(0.0, score)  # Ensure non-negative scores
-    
-    def max_quality(self):
-        # Maximum when TF is very high
-        max_tf = 100.0
-        tf_component = (max_tf * (self.k1 + 1)) / (max_tf + self.k1)
-        return max(0.0, self.idf * tf_component * self.qf)
-    
-    def supports_block_quality(self):
-        return False
+        return result
+
+
 
 if __name__ == '__main__':
-    ix = load_index()
-    with ix.searcher(weighting=ProbabilisticIDF()) as searcher:
-        query = QueryParser("player_name", ix.schema).parse("john OR harry")
-        results = searcher.search(query, limit=10)
-        
-        for hit in results:
-            print(f"{hit['player_name']}: {hit.score}")
+    indexer = Index()
+    indexer.load_tsv()
 
-    with ix.searcher(weighting=SimpleIDF()) as searcher:
-        query = QueryParser("player_name", ix.schema).parse("john OR harry")
-        results = searcher.search(query, limit=10)
-        
-        for hit in results:
-            print(f"{hit['player_name']}: {hit.score}")
+    ix = indexer.make_index()
+    
+    
