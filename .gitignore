@@ -3,3 +3,6 @@ scraped/
 metadata/
 __pycache__/
 backup/
+pylucene/
+diagrams/
+.vscode/

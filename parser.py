@@ -4,12 +4,9 @@ import os
 from typing import List, Optional, Set, cast
 import typing
 from urllib.parse import ParseResult, urlparse
-
-from config import BASE_URL, FORBIDDEN_PATHS, HTML_DIR, METADATA_DIR, PROCESSED_DIR
+from config import BASE_URL, FIELD_PLAYER_STATS, FORBIDDEN_PATHS, GOALKEEPER_STATS, METADATA_DIR, PROCESSED_DIR
 from object_types import METADATA, PLAYER_DATA
-
 from html.parser import HTMLParser
-
 
 def get_hrefs(html: str) -> List[str]:
     href_pattern = re.compile( # linky na inde domeny nechcem
@@ -41,111 +38,6 @@ def get_hrefs(html: str) -> List[str]:
 
     return sorted(unique_hrefs)
 
-
-def process_file(relative_url: str, file_path: str) -> Optional[PLAYER_DATA]:
-    if not os.path.exists(file_path):
-        print(f"{file_path} aint exist")
-        return None
-
-    with open(file_path, "r", encoding="UTF-8") as infile:
-        html = infile.read()
-
-    data: PLAYER_DATA = {
-        "file_path": file_path,
-        "download_url": relative_url,
-        "player_name": "",
-        "dob": "",
-        "position": "",
-        "hand": "",
-        "draft_team": None,
-        "height": None,
-        "weight": None,
-        "games_played": None,
-        "wins": None,
-        "losses": None,
-        "ties_ot_losses": None,
-        "minutes": None,
-        "gaa": None,
-        "save_percentage": None,
-        "goals": None,
-        "assists": None,
-        "points": None,
-        "plus_minus": None,
-        "point_shares": None,
-        "penalty_minutes": None,
-        "shots_on_goal": None,
-        "game_winning_goals": None,
-    }
-
-    name_match = re.search(r"<p>\s*<strong>\s*Full Name:\s*</strong>\s*([^<]+)\s*</p>", html)
-    if name_match is None:
-        return None
-    data["player_name"] = name_match.group(1).strip()
-
-    pos_shoots_match = re.search(
-        r"<p>\s*<strong>\s*Position\s*</strong>\s*:\s*([^<]+?)&nbsp;.*?<strong>\s*(?:Shoots|Catches)\s*</strong>\s*:\s*([^<]+)",
-        html,
-        re.DOTALL,
-    )
-    if pos_shoots_match:
-        position = pos_shoots_match.group(1).strip()
-        data["position"] = position
-        data["hand"] = pos_shoots_match.group(2).strip()
-
-    hw_match = re.search(
-        r"<p><span>[\d\-]+</span>,&nbsp;<span>\d+lb</span>&nbsp;\((\d+)cm,&nbsp;(\d+)kg\)",
-        html,
-    )
-    if hw_match:
-        data["height"] = int(hw_match.group(1))
-        data["weight"] = int(hw_match.group(2))
-
-    field_player_stats = {
-        "Games Played": "games_played",
-        "Goals": "goals",
-        "Assists": "assists",
-        "Points": "points",
-        "Plus/Minus": "plus_minus",
-        "Point Shares": "point_shares",
-        "Penalties in Minutes": "penalty_minuts",
-        "Shots on Goal": "shots_on_goal",
-        "Game-Winning Goals": "game_winning_goals",
-    }
-
-    gk_stats = {
-        "Games Played": "games_played",
-        "Wins": "wins",
-        "Losses": "losses",
-        "Ties plus Overtime/Shootout Losses": "ties_ot_losses",
-        "Shutouts": "shootout",
-        "Minutes": "minutes",
-        "Goals Against Average": "gaa",
-        "Save Percentage": "save_percentage"
-    }
-
-    stats = gk_stats if position == 'G' else field_player_stats
-
-    for tip, key in stats.items():
-        match = re.search(
-            rf'data-tip="[^"]*{re.escape(tip)}[^"]*".*?(?:<p>([^<]*)</p>)+',
-            html,
-            re.DOTALL,
-        )
-        if match:
-            all_p = re.findall(r"<p>([^<]*)</p>", match.group(0))
-            if all_p:
-                last_value = all_p[-1].strip()
-                try:
-                    if key == "point_shares":
-                        data[key] = float(last_value)
-                    else:
-                        data[key] = int(float(last_value))
-                except ValueError:
-                    data[key] = 0
-
-    return data
-
-
 class Parser(HTMLParser):
     def __init__(self, fp: str, url: str):
         super().__init__() 
@@ -153,6 +45,7 @@ class Parser(HTMLParser):
         self.text = ""
         self.file_path = fp
         self.url = url
+        self.current_index = 1
 
 
     def handle_data(self, data: str):
@@ -160,6 +53,7 @@ class Parser(HTMLParser):
 
     def process_file(self):
         data: PLAYER_DATA = {
+            #"id": self.current_index,
             "file_path": self.file_path,
             "download_url": self.url,
             "player_name": "",
@@ -176,6 +70,7 @@ class Parser(HTMLParser):
             "minutes": None,
             "gaa": None,
             "save_percentage": None,
+            "shootouts": None,
             "goals": None,
             "assists": None,
             "points": None,
@@ -219,31 +114,7 @@ class Parser(HTMLParser):
         if draft_match:
             data['draft_team'] = draft_match.group(1).strip()
 
-        field_player_stats = {
-            "games_played": "GP",
-            "goals": "G",
-            "assists": "A",
-            "points": "PTS",
-            "plus_minus": "+/-",
-            "point_shares": "PS",
-            "penalty_minutes": "PIM",
-            "shots_on_goal": "SH",
-            "game_winning_goals": "GWG"
-        }
-
-        gk_stats = {
-            "games_played": "GP",
-            "wins": "W",
-            "losses": "L",
-            "ties_ot_losses": "T",
-            "shootout": "SHO",
-            "point_shares": "PS",
-            "minutes": "MIN",
-            "gaa": "GAA",
-            "save_percentage": "SV%"
-        }
-
-        stats = gk_stats if position == 'G' else field_player_stats
+        stats = GOALKEEPER_STATS if position == 'G' else FIELD_PLAYER_STATS
 
         for key, search_value in stats.items():
             pattern = rf"{re.escape(search_value)}\s*[\r\n ]+(-?\d+(?:\.\d+)?)"
@@ -253,8 +124,24 @@ class Parser(HTMLParser):
                 value = float(value) if "." in value else int(value)
                 data[key] = value
         
-
+        self.current_index += 1
         return data
+
+
+
+def process_file(relative_url: str, file_path: str) -> Optional[PLAYER_DATA]:
+    if not os.path.exists(file_path):
+        print(f"{file_path} aint exist")
+        return None
+
+    with open(file_path, "r", encoding="UTF-8") as infile:
+        html = infile.read()
+
+    parser = Parser(file_path, relative_url)
+    parser.feed(html)
+    return parser.process_file()
+
+
 
     
 
@@ -264,34 +151,36 @@ def parse_downloaded_stuff(count_files: int | None = None):
     with open(file_path, 'r', encoding='UTF-8') as infile:
         reader = csv.DictReader(infile, delimiter='\t')
         players_data: List[PLAYER_DATA] = []
-        for row in reader:
+
+        total_files = sum(1 for _ in open(file_path, encoding='UTF-8')) - 1
+        infile.seek(0)
+        next(reader)
+
+        print(f'Total files: {total_files}')
+
+        for idx, row in enumerate(reader, start=1):
             data = typing.cast(METADATA, row)
+            print(f"[{idx}/{total_files}] Processing {data['file_path']}...")
+
             player = process_file(data['download_url'], data['file_path'])
-            
             if player is None:
+                print(f"  ⚠️ Skipped {data['file_path']} (player=None)")
                 continue
 
             players_data.append(player)
-            
+
             if count_files is not None and len(players_data) >= count_files:
+                print(f"✅ Processed {len(players_data)} files, stopping early.")
                 break
-    
-    out_path = os.path.join(PROCESSED_DIR, 'data.tsv')
-    
+        
     if not players_data:
         print("No player data found.")
         return
 
+    out_path = os.path.join(PROCESSED_DIR, 'data.tsv')
     with open(out_path, 'w', encoding='UTF-8', newline='') as outfile:
         writer = csv.DictWriter(outfile, fieldnames=players_data[0].keys(), delimiter='\t')
         writer.writeheader()
         writer.writerows(players_data)
 
 
-
-if __name__ == '__main__':
-    with open(os.path.join(HTML_DIR, 'alvesjo01.html'), 'r', encoding='UTF-8') as file:
-        data = file.read()
-    f = Parser('.\\scraped\\players\\alvesjo01.html', 'https://www.hockey-reference.com/players/a/anderpe01.html')
-    f.feed(data)
-    print(f.process_file())

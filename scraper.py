@@ -46,11 +46,33 @@ def create_filename(relative_url: str) -> str:
         relative_url = relative_url[1:]
     return relative_url.replace('/', '_')    
 
+def fetch_root() -> str:
+    if not os.path.exists(os.path.join(HTML_DIR, 'index.html')):
+        response = session.get(BASE_URL, headers=HEADERS, timeout=50)
+
+        with open(os.path.join(HTML_DIR, 'index.html'), 'w', encoding='UTF-8') as index:
+            index.write(response.text)
+
+        with open(os.path.join(METADATA_DIR, 'index', 'index_metadata.tsv'), 'w', encoding='UTF-8') as outfile:
+            data: METADATA = {
+                'download_date': date.today().strftime('%d--%m--%Y'),
+                'download_url': BASE_URL,
+                'file_path': os.path.join(HTML_DIR, 'index.html')
+            }
+            writer = csv.writer(outfile, delimiter='\t')
+            write_metadata(writer, data, True)
+        sleep()
+        return response.text
+    else:
+        with open(os.path.join(HTML_DIR, 'index.html'), 'r', encoding='UTF-8') as index:
+            return index.read()
+
+
 
 def fetch_file(relative_url: str, downloaded_urls: Dict[str, str], writer: Any) -> str:
     url = f'{BASE_URL}{relative_url}'
 
-    if url in downloaded_urls:
+    if url in downloaded_urls: # toto actually neni filter, len nebudem znova stahovat stranky, ktore uz mam ulozene
         path = downloaded_urls[url]
         with open(path, 'r', encoding='UTF-8') as file:
             print(f'{relative_url} skipped')
@@ -75,7 +97,7 @@ def fetch_file(relative_url: str, downloaded_urls: Dict[str, str], writer: Any) 
 
 
 def push_to_stack(stack: List[str], urls: List[str], visited: Set[str]):
-    for url in urls:
+    for url in urls: # toto je cast filtra
         if url in visited:
             continue
 
@@ -85,7 +107,9 @@ def push_to_stack(stack: List[str], urls: List[str], visited: Set[str]):
 def run_scraper() -> None:
     stack = ['/']
     session_visited_urls: Set[str] = set()
-    downloaded_urls = read_metadata()
+    downloaded_urls = read_metadata()  # lebo sak nemam to pustene 24/7 3 tyzdne
+
+    #fetch_root() # call this on first call of run_scraper
 
     with open(os.path.join(METADATA_DIR, 'all_metadata.tsv'), 'a', encoding='UTF-8') as mtdt:
         writer = csv.writer(mtdt, delimiter='\t')
