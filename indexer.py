@@ -76,7 +76,7 @@ class Index:
 
 
     def load_tsv(self):
-        tsv_path = os.path.join(PROCESSED_DIR, 'data_with_id.tsv')
+        tsv_path = os.path.join(PROCESSED_DIR, 'data.tsv')
 
         with open(tsv_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f, delimiter='\t')
@@ -208,7 +208,7 @@ class Index:
     
     def get_idf_probabilistic(self, field: str, term: str) -> float:
         """
-        Probabilistic IDF: log((N - df) / df)
+        Probabilistic IDF: max(0, log((N - df) / df))
         
         Interpretation: log of the ratio of documents NOT containing the term
         to documents containing the term.
@@ -518,7 +518,7 @@ class Index:
         if limit is not None:
             final_results = final_results[:limit]
         
-        query_keys = [key for key,_ in text_query] +[key for key, _, _ in numeric_query]
+        query_keys = [key for key,_ in text_query] + [key for key, _, _ in numeric_query]
         self.show_results(final_results, query_keys)
 
 
