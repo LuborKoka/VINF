@@ -8,6 +8,7 @@ from config import BASE_URL, FIELD_PLAYER_STATS, FORBIDDEN_PATHS, GOALKEEPER_STA
 from object_types import METADATA, PLAYER_DATA
 from html.parser import HTMLParser
 
+
 def get_hrefs(html: str) -> List[str]:
     href_pattern = re.compile( # linky na inde domeny nechcem
         rf'href=["\']((?:{re.escape(BASE_URL)}/(?!/)|/(?!/))[^"\']*)["\']',
@@ -117,7 +118,7 @@ class Parser(HTMLParser):
         stats = GOALKEEPER_STATS if position == 'G' else FIELD_PLAYER_STATS
 
         for key, search_value in stats.items():
-            pattern = rf"{re.escape(search_value)}\s*[\r\n ]+(-?\d+(?:\.\d+)?)"
+            pattern = rf"{re.escape(search_value)}-?[0-9]?\.?[0-9]*\s*[\r\n ]+(-?\d+(?:\.\d+)?|-?\.\d+)"
             match = re.search(pattern, self.text)
             if match:
                 value = match.group(1)
@@ -160,6 +161,9 @@ def parse_downloaded_stuff(count_files: int | None = None):
 
         for idx, row in enumerate(reader, start=1):
             data = typing.cast(METADATA, row)
+            if '/players' not in data['download_url']:
+                print(f"  ⚠️ Skipped {data['file_path']} (irrelevant url)")
+                continue
             print(f"[{idx}/{total_files}] Processing {data['file_path']}...")
 
             player = process_file(data['download_url'], data['file_path'])
@@ -182,5 +186,3 @@ def parse_downloaded_stuff(count_files: int | None = None):
         writer = csv.DictWriter(outfile, fieldnames=players_data[0].keys(), delimiter='\t')
         writer.writeheader()
         writer.writerows(players_data)
-
-

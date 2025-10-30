@@ -21,7 +21,6 @@ class POSITION(Enum):
 
 
 class IDF(Enum):
-    SMOOTH = 'smooth'
     PROBABILISTIC = 'probabilistic'
     STANDARD = 'standard'
 
@@ -132,7 +131,7 @@ class Index:
             self.index[field] = sorted(values, key=lambda x: x[0])
         return
         
-    def extend_index(self, row: PLAYER_DATA, id: int):
+    def extend_index(self, row: PLAYER_DATA, id: int) -> None:
         for key in self.text_fields:
             if key in row:
                 value = cast(str | None, row[key])
@@ -161,29 +160,15 @@ class Index:
                         
 
     def get_tf(self, field: str, doc_id: int, term: str) -> float:
-        """
-        Get term frequency (raw count) for a term in a document.
-        Returns 0 if term not found.
-        """
         if doc_id not in self.tf.get(field, {}):
             return 0.0
         return float(self.tf[field][doc_id].get(term, 0))
     
     def get_tf_log_normalized(self, field: str, doc_id: int, term: str) -> float:
-        """
-        Get log-normalized term frequency: 1 + log(TF).
-        Reduces the impact of very high term frequencies.
-        """
         tf = self.get_tf(field, doc_id, term)
         return 1 + math.log(tf) if tf > 0 else 0.0
 
     def get_idf_standard(self, field: str, term: str) -> float:
-        """
-        Standard IDF: log(N / df)
-        where N = total documents, df = documents containing term
-        
-        Returns 0 if term not found.
-        """
         N = len(self.data)
         df = self.df.get(field, {}).get(term, 0)
         
@@ -191,36 +176,9 @@ class Index:
             return 0.0
         
         return math.log(N / df)
-    
-    def get_idf_smooth(self, field: str, term: str) -> float:
-        """
-        Smoothed IDF: log((N + 1) / (df + 1)) + 1
-        
-        Advantages:
-        - Prevents division by zero
-        - Prevents zero IDF for terms in all documents
-        - Adds 1 to ensure all terms have positive weight
-        """
-        N = len(self.data)
-        df = self.df.get(field, {}).get(term, 0)
-        
-        return math.log((N + 1) / (df + 1)) + 1
+
     
     def get_idf_probabilistic(self, field: str, term: str) -> float:
-        """
-        Probabilistic IDF: max(0, log((N - df) / df))
-        
-        Interpretation: log of the ratio of documents NOT containing the term
-        to documents containing the term.
-        
-        Advantages:
-        - Based on probability theory
-        - Directly models the odds of a document being relevant
-        - Used in BM25 and probabilistic retrieval models
-        
-        Note: Returns 0 if term appears in all documents (df = N)
-        Can be negative if term appears in more than half the documents
-        """
         N = len(self.data)
         df = self.df.get(field, {}).get(term, 0)
         
@@ -230,33 +188,19 @@ class Index:
         return max(0, math.log((N - df) / df))
     
     def get_tfidf(self, field: str, doc_id: int, term: str, idf_method: IDF = IDF.STANDARD) -> float:
-        """
-        Calculate TF-IDF score for a term in a document.
-        
-        Args:
-            field: Text field name
-            doc_id: Document ID
-            term: Term to score
-            tf_method: 'raw', 'normalized', or 'log'
-            idf_method: 'standard' or 'smooth'
-        
-        Returns:
-            TF-IDF score
-        """
         tf = self.get_tf_log_normalized(field, doc_id, term)
 
         match idf_method:
             case IDF.PROBABILISTIC:
                 idf = self.get_idf_probabilistic(field, term)
-            case IDF.SMOOTH:
-                idf = self.get_idf_smooth(field, term)
             case IDF.STANDARD:
                 idf = self.get_idf_standard(field, term)
-        
-        return tf * idf
+        doc_length = self.doc_lengths[field].get(doc_id, 1)
+        return (tf * idf) / math.sqrt(doc_length)
+
     
 
-    def search_text_fields(self, query: List[Tuple[str, str]], limit: Optional[int] = None) -> List[Tuple[int, float]]:
+    def search_text_fields(self, query: List[Tuple[str, str]], limit: Optional[int] = None, idf: IDF = IDF.PROBABILISTIC) -> List[Tuple[int, float]]:
         """
         Search text fields and rank documents by TF-IDF score.
         Documents must contain ALL tokens from ALL fields in the query (AND logic).
@@ -303,7 +247,7 @@ class Index:
         for doc_id in matching_docs:
             total_score = 0.0
             for field_name, token in query_tokens:
-                tfidf = self.get_tfidf(field_name, doc_id, token, IDF.PROBABILISTIC)
+                tfidf = self.get_tfidf(field_name, doc_id, token, idf)
                 total_score += tfidf
             
             doc_scores[doc_id] = total_score
@@ -474,14 +418,7 @@ class Index:
         return text_filters, numeric_filters
 
 
-    def search(self, query_string: str, limit: Optional[int] = None) -> None:
-        """
-        Search using both text and numeric fields from a query string.
-        
-        Args:
-            query_string: Natural language query string
-            limit: Maximum number of results to return
-        """
+    def search(self, query_string: str, limit: Optional[int] = None, idf: IDF = IDF.PROBABILISTIC) -> None:
         text_query, numeric_query = self.parse_query_string(query_string)
 
         if len(numeric_query) == 0 and len(text_query) == 0:
@@ -489,7 +426,7 @@ class Index:
             return
 
         if len(numeric_query) == 0:
-            results = self.search_text_fields(text_query, limit)
+            results = self.search_text_fields(text_query, limit, idf)
             self.show_results(results, [key for key, _ in text_query])
             return
         
@@ -501,7 +438,7 @@ class Index:
             return
         
 
-        text_results = self.search_text_fields(text_query, limit=None)
+        text_results = self.search_text_fields(text_query, limit=None, idf=idf)
         numeric_results = self.search_numeric_fields(numeric_query)
 
         text_doc_ids = {doc_id for doc_id, _ in text_results}

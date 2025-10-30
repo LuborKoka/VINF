@@ -1,1 +1,0 @@
-skoncil som na mene: **Lars Molin**, tj pismenko **M**
