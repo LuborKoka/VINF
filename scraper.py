@@ -109,7 +109,7 @@ def run_scraper() -> None:
     session_visited_urls: Set[str] = set()
     downloaded_urls = read_metadata()  # lebo sak nemam to pustene 24/7 3 tyzdne
 
-    #fetch_root() # call this on first call of run_scraper
+    #fetch_root() # vytvori metadata subor aj s hlavickou. a ulozi root s normalnym menom
 
     with open(os.path.join(METADATA_DIR, 'all_metadata.tsv'), 'a', encoding='UTF-8') as mtdt:
         writer = csv.writer(mtdt, delimiter='\t')
