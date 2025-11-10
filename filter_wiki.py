@@ -1,29 +1,24 @@
 import time
 from pyspark.sql import SparkSession
-import filter_wiki
 import os
 import bz2
 from typing import List
 import re
 
-os.environ["PYSPARK_PYTHON"] = r"C:\\Users\\kokal\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"
-os.environ["PYSPARK_DRIVER_PYTHON"] = r"C:\\Users\\kokal\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"
 
-
-WIKI_DUMP = ".\\wiki\\enwiki-latest-pages-articles-multistream1.xml-p1p41242.bz2"
-OUTPUT_DIR = ".\\wiki_pages"
+WIKI_DUMP = "./wiki/enwiki-latest-pages-articles.xml.bz2"
+OUTPUT_DIR = "./wiki_pages"
 
 filter_wiki = SparkSession.builder \
     .master("local[*]") \
     .appName("Load data") \
-    .config("spark.driver.host", "127.0.0.1") \
-    .config("spark.local.dir", "D:\\spark_temp") \
-    .config("spark.executor.memory", "6g") \
-    .config("spark.driver.memory", "6g") \
+    .config("spark.driver.host", "0.0.0.0") \
+    .config("spark.executor.memory", "4g") \
+    .config("spark.driver.memory", "4g") \
     .config("spark.executor.memoryOverhead", "2g") \
     .config("spark.executor.cores", "2") \
-    .config("spark.dynamicAllocation.enabled", "true") \
-    .config("spark.shuffle.service.enabled", "true") \
+    .config("spark.dynamicAllocation.enabled", "false") \
+    .config("spark.shuffle.service.enabled", "false") \
     .config("spark.driver.maxResultSize", "2g") \
     .config("spark.network.timeout", "1200s") \
     .config("spark.sql.broadcastTimeout", "1200s") \
@@ -36,7 +31,7 @@ filter_wiki = SparkSession.builder \
 spark_context = filter_wiki.sparkContext
 
 data_patterns = {
-    "born": r"(?i)\bBorn\s+([^\n]+)",
+    #"born": r"(?i)\bBorn\s+([^\n]+)",
     "nhl_team": r"(?i)\bNHL\s*team\s+([^\n]+)",
     "national_team": r"(?i)\bNational\s*team\s+([^\n]+)",
     "nhl_draft": r"(?i)\bNHL\s*draft\s+([^\n]+)",
@@ -51,7 +46,7 @@ def is_about_hockey_player(page: str) -> bool:
     if is_redirect(page):
         return False
     
-    for pattern in data_patterns:
+    for pattern in data_patterns.values():
         if re.search(pattern, page):
             return True
     return False
@@ -80,7 +75,7 @@ def process_chunk(chunk: List[str], output_path: str, chunk_counter: int):
     filtered_rdd.saveAsTextFile(chunk_output_path)
     print(f"Saved chunk {chunk_counter} to {chunk_output_path}")
 
-def process_wiki_dump_in_chunks(file_path: str, output_path: str, chunk_size: int = 20000):
+def process_wiki_dump_in_chunks(file_path: str, output_path: str, chunk_size: int = 10000):
     chunk_counter = 0
     current_chunk: List[str] = []
     
