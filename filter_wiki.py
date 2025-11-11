@@ -7,7 +7,9 @@ import re
 
 
 WIKI_DUMP = "./wiki/enwiki-latest-pages-articles.xml.bz2"
-OUTPUT_DIR = "./wiki_pages"
+OUT_DIR = "./wiki_pages_players"
+MERGED_DIR = './players_merged'
+CHUNK_SIZE = 500
 
 filter_wiki = SparkSession.builder \
     .master("local[*]") \
@@ -30,13 +32,14 @@ filter_wiki = SparkSession.builder \
 
 spark_context = filter_wiki.sparkContext
 
-data_patterns = {
-    #"born": r"(?i)\bBorn\s+([^\n]+)",
-    "nhl_team": r"(?i)\bNHL\s*team\s+([^\n]+)",
-    "national_team": r"(?i)\bNational\s*team\s+([^\n]+)",
-    "nhl_draft": r"(?i)\bNHL\s*draft\s+([^\n]+)",
-    "playing_career": r"(?i)\bPlaying\s*career\s+([^\n]+)",
-}
+hockey_pattern = re.compile(
+    r"\{\{[Ss]hort description\|[^}]*ice hockey player[^}]*\}\}", re.IGNORECASE
+)
+
+def is_ice_hockey_player(page: str) -> bool:
+    """Return True if the page has a short description containing 'ice hockey player'."""
+    return bool(hockey_pattern.search(page))
+
 
 def is_redirect(page: str) -> bool:
     pattern = r"<redirect.+?/>"
@@ -46,24 +49,71 @@ def is_about_hockey_player(page: str) -> bool:
     if is_redirect(page):
         return False
     
-    for pattern in data_patterns.values():
-        if re.search(pattern, page):
-            return True
-    return False
+    return is_ice_hockey_player(page)
 
-def get_page_generator(path: str):
-    with bz2.open(path, "rt", encoding='UTF-8') as file:
-        buffer: List[str] = []
-        in_page = False         
+def get_page_generator_from_file(file_path: str, is_bz2: bool):
+    """Yields <page>...</page> blocks from a single file."""
+    buffer: List[str] = []
+    is_page = False
+    try:
+        file = bz2.open(file_path, "rt", encoding="utf-8") if is_bz2 else open(file_path, "r", encoding="utf-8")
+        
         for line in file:
             if "<page>" in line:
-                in_page = True
+                is_page = True
                 buffer = []
-            if in_page:
+            if is_page:
                 buffer.append(line)
-            if "</page>" in line and in_page:
+            if "</page>" in line and is_page:
                 yield "".join(buffer)
-                in_page = False
+                is_page = False
+    except (OSError, EOFError, UnicodeDecodeError) as e:
+        print(f"⚠️ Skipping file {file_path} due to error: {e}")
+
+    finally:
+        if file:
+            file.close()
+
+def get_all_part_files(root_dir: str):
+    """Recursively find all part-0000[0-7] files."""
+    for root, _, files in os.walk(root_dir):
+        for fname in files:
+            if re.match(r"part-0000[0-7]$", fname):
+                yield os.path.join(root, fname)
+
+def merge_pages_in_chunks():
+    """Combine all pages into a few large XML files."""
+    os.makedirs(MERGED_DIR, exist_ok=True)
+    chunk = []
+    chunk_counter = 0
+    total_pages = 0
+
+    for file_path in get_all_part_files(OUT_DIR):
+        print(f"Reading {file_path}...")
+        for page in get_page_generator_from_file(file_path, False):
+            chunk.append(page)
+            total_pages += 1
+
+            if len(chunk) >= CHUNK_SIZE:
+                save_chunk(chunk, chunk_counter)
+                chunk = []
+                chunk_counter += 1
+
+    if chunk:
+        save_chunk(chunk, chunk_counter)
+        print(f"Saved final chunk #{chunk_counter}")
+
+    print(f"✅ Merged {total_pages} pages into {chunk_counter + 1} XML files.")
+
+def save_chunk(pages: List[str], chunk_counter: int):
+    """Save a chunk of filtered pages to the target directory."""
+    out_file = os.path.join(MERGED_DIR, f"chunk_{chunk_counter}.xml")
+    with open(out_file, "w", encoding="utf-8") as f:
+        for page in pages:
+            f.write(page)
+            if not page.endswith("\n"):
+                f.write("\n")
+    print(f"✅ Saved {len(pages)} pages to {out_file}")
 
 def process_chunk(chunk: List[str], output_path: str, chunk_counter: int):
     rdd = spark_context.parallelize(chunk)
@@ -75,11 +125,12 @@ def process_chunk(chunk: List[str], output_path: str, chunk_counter: int):
     filtered_rdd.saveAsTextFile(chunk_output_path)
     print(f"Saved chunk {chunk_counter} to {chunk_output_path}")
 
-def process_wiki_dump_in_chunks(file_path: str, output_path: str, chunk_size: int = 10000):
+def process_wiki_dump(file_path: str = WIKI_DUMP, output_path: str = OUT_DIR, chunk_size: int = 10000):
+    os.makedirs(output_path, exist_ok=True)
     chunk_counter = 0
     current_chunk: List[str] = []
     
-    for page in get_page_generator(file_path):
+    for page in get_page_generator_from_file(file_path, True):
         current_chunk.append(page)
         
         if len(current_chunk) >= chunk_size:
@@ -94,10 +145,7 @@ def process_wiki_dump_in_chunks(file_path: str, output_path: str, chunk_size: in
     
 
 
-if __name__ == '__main__':
-    start = time.time()
-    process_wiki_dump_in_chunks(WIKI_DUMP, OUTPUT_DIR)
-    filter_wiki.stop()
-    end = time.time()
-    
-    print(f"Time to execute: {end - start:.2f}s")
+if __name__ == "__main__":
+    process_wiki_dump()
+    merge_pages_in_chunks()
+    print("🎉 Done filtering ice hockey players.")
