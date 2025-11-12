@@ -1,4 +1,3 @@
-import time
 from pyspark.sql import SparkSession
 import os
 import bz2
@@ -11,9 +10,9 @@ OUT_DIR = "./wiki_pages_players"
 MERGED_DIR = './players_merged'
 CHUNK_SIZE = 500
 
-filter_wiki = SparkSession.builder \
+spark = SparkSession.builder \
     .master("local[*]") \
-    .appName("Load data") \
+    .appName("Parse data") \
     .config("spark.driver.host", "0.0.0.0") \
     .config("spark.executor.memory", "4g") \
     .config("spark.driver.memory", "4g") \
@@ -22,15 +21,11 @@ filter_wiki = SparkSession.builder \
     .config("spark.dynamicAllocation.enabled", "false") \
     .config("spark.shuffle.service.enabled", "false") \
     .config("spark.driver.maxResultSize", "2g") \
-    .config("spark.network.timeout", "1200s") \
-    .config("spark.sql.broadcastTimeout", "1200s") \
     .config("spark.driver.maxResultSize", "4g") \
-    .config("spark.sql.shuffle.partitions", "500") \
-    .config("spark.executor.heartbeatInterval", "60s") \
     .config("spark.sql.execution.pythonUTF8StringEncoding", "true") \
     .getOrCreate()
 
-spark_context = filter_wiki.sparkContext
+spark_context = spark.sparkContext
 
 hockey_pattern = re.compile(
     r"\{\{[Ss]hort description\|[^}]*ice hockey player[^}]*\}\}", re.IGNORECASE

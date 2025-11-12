@@ -8,7 +8,6 @@ class METADATA(TypedDict):
 
 
 class PLAYER_DATA(TypedDict):
-#    id: int
     file_path: str
     download_url: str
     player_name: str
@@ -59,3 +58,27 @@ class INDEX(TypedDict):
     penalty_minutes: Optional[int]
     shots_on_goal: Optional[int]
     game_winning_goals: Optional[int]
+
+class CAREER_FRAME(TypedDict):
+    start: Optional[int]
+    end: Optional[int]
+
+
+class DRAFT(TypedDict):
+    draft: Optional[str]
+    draft_year: Optional[int]
+    draft_team: Optional[str]
+
+
+class WIKI_PLAYER(TypedDict):
+    full_name: str
+    birthplace: str
+    career_start: Optional[int]
+    career_end: Optional[int]
+    draft: Optional[str]
+    draft_year: Optional[str]
+    draft_team: Optional[str]
+    current_league: Optional[str]
+    national_team: Optional[str]
+    current_team: Optional[str]
+    nationality: Optional[str]
