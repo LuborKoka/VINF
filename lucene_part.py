@@ -152,6 +152,45 @@ def make_index(data: List[Union[PLAYER_DATA, WIKI_PLAYER]]):
     writer.close()
 
 
+def parse_query_with_numerics(query_str, text_fields, analyzer):
+    import re
+    
+    # Numeric field patterns: field:[min TO max] or field:value
+    numeric_fields = {
+        'goals': IntPoint, 'assists': IntPoint, 'points': IntPoint,
+        'height': IntPoint, 'weight': IntPoint, 'games_played': IntPoint,
+        'gaa': DoublePoint, 'save_percentage': DoublePoint
+    }
+    
+    builder = BooleanQuery.Builder()
+    remaining_query = query_str
+    
+    # Extract numeric queries
+    for field, point_type in numeric_fields.items():
+        pattern = rf'{field}:\[(\d+(?:\.\d+)?)\s+TO\s+(\d+(?:\.\d+)?)\]'
+        match = re.search(pattern, remaining_query)
+        if match:
+            min_val = float(match.group(1)) if point_type == DoublePoint else int(match.group(1))
+            max_val = float(match.group(2)) if point_type == DoublePoint else int(match.group(2))
+            
+            range_query = point_type.newRangeQuery(field, min_val, max_val)
+            builder.add(range_query, BooleanClause.Occur.MUST)
+            
+            # Remove from query string
+            remaining_query = remaining_query.replace(match.group(0), '')
+    
+    # Parse remaining text query
+    if remaining_query.strip():
+        text_query = MultiFieldQueryParser.parse(
+            remaining_query.strip(),
+            text_fields,
+            [BooleanClause.Occur.SHOULD] * len(text_fields),
+            analyzer
+        )
+        builder.add(text_query, BooleanClause.Occur.MUST)
+    
+    return builder.build()
+
 def load_df(file_path = './processed_pages.joblib'):
     pd_df: pd.DataFrame = joblib.load(file_path)
     return pd_df.to_dict('records')
@@ -177,12 +216,7 @@ if __name__ == '__main__':
             break
         
         # Parse using static method
-        query = MultiFieldQueryParser.parse(
-            query_str, 
-            text_fields, 
-            [BooleanClause.Occur.SHOULD] * len(text_fields),  # OR across fields
-            analyzer
-        )
+        query = query = parse_query_with_numerics(query_str, text_fields, analyzer)
         hits = searcher.search(query, 10)
             
         print(f"\nFound {hits.totalHits.value()} results:\n")
