@@ -1,19 +1,19 @@
 import lucene
 from object_types import PLAYER_DATA, WIKI_PLAYER
 from org.apache.lucene.store import MMapDirectory
-from org.apache.lucene.index import IndexWriter, IndexWriterConfig, DirectoryReader
+from org.apache.lucene.index import IndexWriter, IndexWriterConfig, DirectoryReader, Term
 from org.apache.lucene.analysis.standard import StandardAnalyzer
 from java.nio.file import Paths
-from org.apache.lucene.document import Document, Field, TextField, StringField, StoredField, IntPoint, DoublePoint, LongPoint
-from org.apache.lucene.search import IndexSearcher, BooleanQuery, BooleanClause
-from org.apache.lucene.queryparser.classic import MultiFieldQueryParser
+from org.apache.lucene.document import Document, Field, TextField, StoredField, IntPoint, DoublePoint
+from org.apache.lucene.search import IndexSearcher, BooleanQuery, BooleanClause, BooleanQuery, BooleanClause, TermQuery, BoostQuery
+import csv
+import re
 
 lucene.initVM()
 
 from typing import List, Union
-import pandas as pd
-import joblib
-index_path = "./index"  # Change this to where you want the index
+
+index_path = "./index" 
 index_dir = MMapDirectory(Paths.get(index_path))
 
 analyzer = StandardAnalyzer()
@@ -21,34 +21,30 @@ config = IndexWriterConfig(analyzer)
 
 writer = IndexWriter(index_dir, config)
 
-def safe_int(input_string: str) -> int | None:
-    if not isinstance(input_string, (str, int)) or input_string is None:
-        if isinstance(input_string, int):
-            return input_string
-        return None
-
-    try:
-        return int(input_string)
-    except ValueError:
+def safe_int(input_string: str | None) -> int | None:
+    if not input_string:
         return None
     
-def safe_float(input_string: str) -> float | None:
-    if not isinstance(input_string, (str, float)) or input_string is None:
-        if isinstance(input_string, float):
-            return input_string
+    if input_string == 'NaN':
         return None
-
-    try:
-        return float(input_string)
-    except ValueError:
+    
+    return int(float(input_string))
+    
+def safe_float(input_string: str | None) -> float | None:
+    if not input_string:
         return None
+    if input_string == 'NaN':
+        return None
+    return float(input_string)
 
 
 def make_index(data: List[Union[PLAYER_DATA, WIKI_PLAYER]]):
     for player in data:
         doc = Document()
         
-        # Text fields - searchable AND stored
+        # Text fields
+        if player['title']:
+            doc.add(TextField("title", str(player['title']), Field.Store.YES))
         if player['player_name']:
             doc.add(TextField("player_name", str(player['player_name']), Field.Store.YES))
         if player['full_name']:
@@ -76,7 +72,7 @@ def make_index(data: List[Union[PLAYER_DATA, WIKI_PLAYER]]):
         if player['nationality']:
             doc.add(TextField("nationality", str(player['nationality']), Field.Store.YES))
         
-        # Integer fields - searchable (range queries) AND stored
+        # Integer fields
         if safe_int(player['height']) is not None:
             doc.add(IntPoint("height", safe_int(player['height'])))
             doc.add(StoredField("height", safe_int(player['height'])))
@@ -126,7 +122,7 @@ def make_index(data: List[Union[PLAYER_DATA, WIKI_PLAYER]]):
             doc.add(IntPoint("career_end", safe_int(player['career_end'])))
             doc.add(StoredField("career_end", safe_int(player['career_end'])))
         
-        # Float/Double fields - searchable AND stored
+        # Float/Double fields
         if safe_float(player['shootouts']) is not None:
             doc.add(DoublePoint("shootouts", safe_float(player['shootouts'])))
             doc.add(StoredField("shootouts", safe_float(player['shootouts'])))
@@ -151,62 +147,262 @@ def make_index(data: List[Union[PLAYER_DATA, WIKI_PLAYER]]):
     writer.commit()
     writer.close()
 
-
-def parse_query_with_numerics(query_str, text_fields, analyzer):
-    import re
+def print_result(i, hit, doc, queried_fields):
+    print(f"{'='*80}")
+    print(f"#{i+1} | Score: {hit.score:.4f}")
+    print(f"{'='*80}")
     
-    # Numeric field patterns: field:[min TO max] or field:value
-    numeric_fields = {
-        'goals': IntPoint, 'assists': IntPoint, 'points': IntPoint,
-        'height': IntPoint, 'weight': IntPoint, 'games_played': IntPoint,
-        'gaa': DoublePoint, 'save_percentage': DoublePoint
-    }
+    print(f"Player:       {doc.get('player_name') or 'N/A'}")
+    print(f"DOB:          {doc.get('dob') or 'N/A'}")
+    
+    if queried_fields:
+        print(f"\n{'-'*80}")
+        print("Queried Fields:")
+        print(f"{'-'*80}")
+        
+        for field in queried_fields: 
+            value = str(doc.get(field))
+            if value:
+                field_name = field.replace('_', ' ').title()
+                print(f"{field_name:20s}: {value}")
+    else:
+        print(f"\n{'-'*80}")
+        print("Player Stats:")
+        print(f"{'-'*80}")
+        
+        stats = [
+            ('Position', doc.get('position')),
+            ('Current Team', doc.get('current_team')),
+            ('Nationality', doc.get('nationality')),
+            ('Height', doc.get('height')),
+            ('Weight', doc.get('weight')),
+            ('Goals', doc.get('goals')),
+            ('Assists', doc.get('assists')),
+            ('Points', doc.get('points')),
+            ('Goals', doc.get('goals')),
+        ]
+        
+        for label, value in stats:
+            if value:
+                print(f"{label:20s}: {value}")
+    
+    print(f"\n{'-'*80}")
+    print(f"URL:          {doc.get('download_url') or 'N/A'}")
+    print()
+
+import re
+
+def parse_query_string(query_str, text_fields, numeric_fields):
+    """
+    Parse a query string into structured field queries.
+    
+    Example:
+        "dob january 1995 and national_team canada and goals [200 TO 500]"
+        ->
+        [
+            {'field': 'dob', 'tokens': ['january', '1995'], 'type': 'text'},
+            {'field': 'national_team', 'tokens': ['canada'], 'type': 'text'},
+            {'field': 'goals', 'range': (200, 500), 'type': 'numeric'}
+        ]
+    """
+    parsed_queries = []
+    
+    all_fields = text_fields + list(numeric_fields.keys())
+    
+    segments = re.split(r'\s+(?:and|or)\s+', query_str, flags=re.IGNORECASE)
+    
+    for segment in segments:
+        segment = segment.strip()
+        if not segment:
+            continue
+        
+        matched_field = None
+        for field in all_fields:
+            if segment.strip().startswith(field):
+                matched_field = field
+                break
+        
+        if not matched_field:
+            continue
+        
+        value_part = segment[len(matched_field):].strip()
+        
+        if matched_field in numeric_fields:
+            range_match = re.match(r'\[(\d+(?:\.\d+)?)\s+TO\s+(\d+(?:\.\d+)?)\]', value_part)
+            if range_match:
+                point_type = numeric_fields[matched_field]
+                if point_type == DoublePoint:
+                    min_val = float(range_match.group(1))
+                    max_val = float(range_match.group(2))
+                else: 
+                    min_val = int(float(range_match.group(1)))
+                    max_val = int(float(range_match.group(2)))
+                
+                parsed_queries.append({
+                    'field': matched_field,
+                    'range': (min_val, max_val),
+                    'type': 'numeric'
+                })
+            else:
+                try:
+                    point_type = numeric_fields[matched_field]
+                    if point_type == DoublePoint:
+                        value = float(value_part)
+                    else:
+                        value = int(float(value_part))
+                    
+                    parsed_queries.append({
+                        'field': matched_field,
+                        'value': value,
+                        'type': 'numeric'
+                    })
+                except ValueError:
+                    continue
+        else:
+            tokens = re.findall(r'\b\w+\b', value_part.lower())
+            
+            if tokens:
+                parsed_queries.append({
+                    'field': matched_field,
+                    'tokens': tokens,
+                    'type': 'text'
+                })
+    
+    return parsed_queries
+
+def build_lucene_query(parsed_queries, numeric_fields):
+    """
+    Build a Lucene BooleanQuery from parsed query structure.
+    
+    For text fields: all tokens must be present (AND logic within field)
+    For numeric fields: apply as range filters
+    """
+
     
     builder = BooleanQuery.Builder()
-    remaining_query = query_str
     
-    # Extract numeric queries
-    for field, point_type in numeric_fields.items():
-        pattern = rf'{field}:\[(\d+(?:\.\d+)?)\s+TO\s+(\d+(?:\.\d+)?)\]'
-        match = re.search(pattern, remaining_query)
-        if match:
-            min_val = float(match.group(1)) if point_type == DoublePoint else int(match.group(1))
-            max_val = float(match.group(2)) if point_type == DoublePoint else int(match.group(2))
+    for pq in parsed_queries:
+        if pq['type'] == 'text':
+            field = pq['field']
+            tokens = pq['tokens']
             
-            range_query = point_type.newRangeQuery(field, min_val, max_val)
-            builder.add(range_query, BooleanClause.Occur.MUST)
+            if len(tokens) == 1:
+                term = Term(field, tokens[0])
+                term_query = TermQuery(term)
+                builder.add(term_query, BooleanClause.Occur.MUST)
+            else:
+                sub_builder = BooleanQuery.Builder()
+                for token in tokens:
+                    term = Term(field, token)
+                    term_query = TermQuery(term)
+                    sub_builder.add(term_query, BooleanClause.Occur.MUST)
+                
+                builder.add(sub_builder.build(), BooleanClause.Occur.MUST)
+        
+        elif pq['type'] == 'numeric':
+            field = pq['field']
             
-            # Remove from query string
-            remaining_query = remaining_query.replace(match.group(0), '')
-    
-    # Parse remaining text query
-    if remaining_query.strip():
-        text_query = MultiFieldQueryParser.parse(
-            remaining_query.strip(),
-            text_fields,
-            [BooleanClause.Occur.SHOULD] * len(text_fields),
-            analyzer
-        )
-        builder.add(text_query, BooleanClause.Occur.MUST)
+            if 'range' in pq:
+                min_val, max_val = pq['range']
+                point_type = numeric_fields[field]
+                range_query = point_type.newRangeQuery(field, min_val, max_val)
+                builder.add(range_query, BooleanClause.Occur.MUST)
+            elif 'value' in pq:
+                value = pq['value']
+                point_type = numeric_fields[field]
+                exact_query = point_type.newExactQuery(field, value)
+                builder.add(exact_query, BooleanClause.Occur.MUST)
     
     return builder.build()
 
-def load_df(file_path = './processed_pages.joblib'):
-    pd_df: pd.DataFrame = joblib.load(file_path)
-    return pd_df.to_dict('records')
+def parse_query_with_numerics(query_str):
+    numeric_fields = {
+        'height': IntPoint,
+        'weight': IntPoint,
+        'games_played': IntPoint,
+        'wins': IntPoint,
+        'losses': IntPoint,
+        'ties_ot_losses': IntPoint,
+        'minutes': IntPoint,
+        'goals': IntPoint,
+        'assists': IntPoint,
+        'points': IntPoint,
+        'plus_minus': IntPoint,
+        'penalty_minutes': IntPoint,
+        'shots_on_goal': IntPoint,
+        'game_winning_goals': IntPoint,
+        'career_start': IntPoint,
+        'career_end': IntPoint,
+        'shootouts': DoublePoint,
+        'gaa': DoublePoint,
+        'save_percentage': DoublePoint,
+        'point_shares': DoublePoint
+    }
+
+    text_fields = ["player_name", "full_name", "position", "birthplace", "hand",
+               "nationality", "draft_team", "current_team", "national_team",
+               "draft", "draft_year", "current_league", "dob"]
+    
+
+    queries = parse_query_string(query_str, text_fields, numeric_fields)
+
+    if len(queries) == 0:
+        tokens = re.findall(r'\b\w+\b', query_str.lower())
+
+        boosts = {
+            'player_name': 3.0,
+            'full_name': 3.0,
+            'title': 2.0,
+            'dob': 2.0,
+            'draft_team': 1.5,
+            'current_team': 1.5
+        }
+        
+        builder = BooleanQuery.Builder()
+        
+        for token in tokens:
+            field_builder = BooleanQuery.Builder()
+            
+            for field in text_fields:
+                term = Term(field, token)
+                term_query = TermQuery(term)
+
+                if field in boosts:
+                    boosted_query = BooleanQuery.Builder()
+                    boosted_query.add(term_query, BooleanClause.Occur.SHOULD)
+                    built_query = boosted_query.build()
+                    term_query = BoostQuery(built_query, boosts[field])
+
+                field_builder.add(term_query, BooleanClause.Occur.SHOULD)
+            
+            builder.add(field_builder.build(), BooleanClause.Occur.MUST)
+        
+        query = builder.build()
+        return query, []
+
+    query = build_lucene_query(queries, numeric_fields)
+
+    queried_fields = []
+     
+    for q in queries:
+        if q['field'] in query_str and q['field'] not in ['player_name', 'dob', 'download_url']:
+            queried_fields.append(q['field'])
+
+    return query, queried_fields
+
+def load_df(file_path='./processed_pages.tsv'):
+    with open(file_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        return list(reader)
 
 
 if __name__ == '__main__':
-    rows = load_df('./left_merged.joblib')
+    rows = load_df('./df/merged_df.tsv')
 
     make_index(rows)
 
     reader = DirectoryReader.open(index_dir)
     searcher = IndexSearcher(reader)
-
-    text_fields = ["player_name", "full_name", "position", "birthplace", "hand",
-               "nationality", "draft_team", "current_team", "national_team",
-               "draft", "draft_year", "current_league", "dob"]
 
 
     while True:
@@ -215,18 +411,13 @@ if __name__ == '__main__':
         if query_str.lower() == 'quit':
             break
         
-        # Parse using static method
-        query = query = parse_query_with_numerics(query_str, text_fields, analyzer)
-        hits = searcher.search(query, 10)
+        query, queried_fields = parse_query_with_numerics(query_str)
+        hits = searcher.search(query, 5)
             
         print(f"\nFound {hits.totalHits.value()} results:\n")
         
-        # Display results
         for i, hit in enumerate(hits.scoreDocs):
             doc = searcher.storedFields().document(hit.doc)
-            print(f"{i+1}. {doc.get('player_name')} - {doc.get('position')}")
-            print(f"   Team: {doc.get('current_team')}")
-            print(f"   URL: {doc.get('download_url')}\n")
+            print_result(i, hit, doc, queried_fields)
 
-    # Close when done
     reader.close()
