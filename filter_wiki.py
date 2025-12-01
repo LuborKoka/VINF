@@ -1,6 +1,5 @@
 from pyspark.sql import SparkSession
 import os
-import bz2
 from typing import List
 import re
 
@@ -13,19 +12,11 @@ CHUNK_SIZE = 500
 spark = SparkSession.builder \
     .master("local[*]") \
     .appName("Parse data") \
-    .config("spark.driver.host", "0.0.0.0") \
-    .config("spark.executor.memory", "4g") \
     .config("spark.driver.memory", "4g") \
-    .config("spark.executor.memoryOverhead", "2g") \
-    .config("spark.executor.cores", "2") \
-    .config("spark.dynamicAllocation.enabled", "false") \
-    .config("spark.shuffle.service.enabled", "false") \
-    .config("spark.driver.maxResultSize", "2g") \
-    .config("spark.driver.maxResultSize", "4g") \
-    .config("spark.sql.execution.pythonUTF8StringEncoding", "true") \
+    .config("spark.executor.memory", "4g") \
+    .config("spark.sql.files.maxPartitionBytes", "128MB") \
     .getOrCreate()
 
-spark_context = spark.sparkContext
 
 hockey_pattern = re.compile(
     r"\{\{[Ss]hort description\|[^}]*ice hockey player[^}]*\}\}", re.IGNORECASE
@@ -46,12 +37,27 @@ def is_about_hockey_player(page: str) -> bool:
     
     return is_ice_hockey_player(page)
 
-def get_page_generator_from_file(file_path: str, is_bz2: bool):
+def extract_pages_from_partition(iterator):
+    """Extract <page>...</page> blocks from text lines."""
+    buffer = []
+    is_page = False
+    
+    for line in iterator:
+        if "<page>" in line:
+            is_page = True
+            buffer = []
+        if is_page:
+            buffer.append(line)
+        if "</page>" in line and is_page:
+            yield "".join(buffer)
+            is_page = False
+
+def get_page_generator_from_file(file_path: str):
     """Yields <page>...</page> blocks from a single file."""
     buffer: List[str] = []
     is_page = False
     try:
-        file = bz2.open(file_path, "rt", encoding="utf-8") if is_bz2 else open(file_path, "r", encoding="utf-8")
+        file = open(file_path, "r", encoding="utf-8")
         
         for line in file:
             if "<page>" in line:
@@ -110,37 +116,19 @@ def save_chunk(pages: List[str], chunk_counter: int):
                 f.write("\n")
     print(f"✅ Saved {len(pages)} pages to {out_file}")
 
-def process_chunk(chunk: List[str], output_path: str, chunk_counter: int):
-    rdd = spark_context.parallelize(chunk)
-    filtered_rdd = rdd.filter(is_about_hockey_player)
-    chunk_output_path = os.path.join(output_path, f"chunk_{chunk_counter}")
-    #spark_context._jsc.hadoopConfiguration().set("fs.file.impl.disable.cache", "true")
-    #spark_context._jsc.hadoopConfiguration().set("fs.file.impl", "org.apache.hadoop.fs.LocalFileSystem")
-
-    filtered_rdd.saveAsTextFile(chunk_output_path)
-    print(f"Saved chunk {chunk_counter} to {chunk_output_path}")
-
-def process_wiki_dump(file_path: str = WIKI_DUMP, output_path: str = OUT_DIR, chunk_size: int = 10000):
+def process_wiki_dump(file_path: str = WIKI_DUMP, output_path: str = OUT_DIR):
     os.makedirs(output_path, exist_ok=True)
-    chunk_counter = 0
-    current_chunk: List[str] = []
     
-    for page in get_page_generator_from_file(file_path, True):
-        current_chunk.append(page)
-        
-        if len(current_chunk) >= chunk_size:
-            process_chunk(current_chunk, output_path, chunk_counter)
-            current_chunk = []
-            chunk_counter += 1
-    
-    if current_chunk:
-        process_chunk(current_chunk, output_path, chunk_counter)
+    raw_rdd = spark.sparkContext.textFile(WIKI_DUMP)
+    pages_rdd = raw_rdd.mapPartitions(extract_pages_from_partition)
+    hockey_pages_rdd = pages_rdd.filter(is_about_hockey_player)
+    hockey_pages_rdd.coalesce(8).saveAsTextFile(OUT_DIR)
+    print(f"✅ Filtered pages saved to {OUT_DIR}")
+    spark.stop()
 
-    print(f"Processed and saved {chunk_counter + 1} chunks.")
     
 
 
 if __name__ == "__main__":
     process_wiki_dump()
     merge_pages_in_chunks()
-    print("🎉 Done filtering ice hockey players.")
