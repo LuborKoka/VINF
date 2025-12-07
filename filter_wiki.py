@@ -117,13 +117,13 @@ def save_chunk(pages: List[str], chunk_counter: int):
     print(f"✅ Saved {len(pages)} pages to {out_file}")
 
 def process_wiki_dump(file_path: str = WIKI_DUMP, output_path: str = OUT_DIR):
-    os.makedirs(output_path, exist_ok=True)
+    #os.makedirs(output_path, exist_ok=True)
     
-    raw_rdd = spark.sparkContext.textFile(WIKI_DUMP)
+    raw_rdd = spark.sparkContext.textFile(file_path)
     pages_rdd = raw_rdd.mapPartitions(extract_pages_from_partition)
     hockey_pages_rdd = pages_rdd.filter(is_about_hockey_player)
-    hockey_pages_rdd.coalesce(8).saveAsTextFile(OUT_DIR)
-    print(f"✅ Filtered pages saved to {OUT_DIR}")
+    hockey_pages_rdd.coalesce(8).saveAsTextFile(output_path)
+    print(f"✅ Filtered pages saved to {output_path}")
     spark.stop()
 
     
