@@ -1,3 +1,5 @@
+# Autor: Lubor Koka
+
 # Prva cast
 
 How to run
@@ -31,7 +33,7 @@ V `run.py` su volane vsetky funkcie, maximalne su zakomentovane.
 
     ```bash
     docker build -t vinf-lucene .
-    docker run -it -v ./index:/index vinf-lucene bash
+    docker run -it -v . /index:/index vinf-lucene bash
     ```
 
     v docker bashi potom:
