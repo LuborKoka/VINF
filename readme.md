@@ -42,3 +42,9 @@ V `run.py` su volane vsetky funkcie, maximalne su zakomentovane.
     python lucene_part.py
     ```
 
+
+> Samotny join dat z wiki a stranky robim v notebooku `./spark.ipynb`, joinovany df potom dumpnem ako tsv:
+
+```python
+merged_df = html_df.join(wiki_df, (wiki_df['full_name'] == html_df['player_name']) | (html_df['player_name'] == wiki_df['title']), how="left")
+```
