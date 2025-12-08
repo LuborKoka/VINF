@@ -71,6 +71,7 @@ class DRAFT(TypedDict):
 
 
 class WIKI_PLAYER(TypedDict):
+    title: str
     full_name: str
     birthplace: str
     career_start: Optional[int]
@@ -82,3 +83,5 @@ class WIKI_PLAYER(TypedDict):
     national_team: Optional[str]
     current_team: Optional[str]
     nationality: Optional[str]
+    birth_date: Optional[str]
+    sex: Optional[str]

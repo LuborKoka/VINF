@@ -5,8 +5,6 @@ from indexer import get_index, POSITION, IDF
 
 
 if __name__ == '__main__':
-    #run_scraper()
-    #parse_downloaded_stuff()
     ix = get_index()
 
     query_string = f"position {POSITION.GOALKEEPER.value}, games_played more than 1000"

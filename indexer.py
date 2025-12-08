@@ -313,13 +313,13 @@ class Index:
         for id, score in results:
             doc = self.data[id]
 
-            print(f'Player Name: {doc['player_name']}')
+            print(f'Player Name: {doc["player_name"]}')
             for key in query_keys:
                 if key == 'player_name':
                     continue
                 print(f'{key.capitalize()}: {doc[key]}')
 
-            print(f'URL: {doc['download_url']}')
+            print(f'URL: {doc["download_url"]}')
             print(f'Score: {score}\n', '='*80)
 
 

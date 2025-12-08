@@ -40,7 +40,7 @@ def get_hrefs(html: str) -> List[str]:
     return sorted(unique_hrefs)
 
 class Parser(HTMLParser):
-    def __init__(self, fp: str, url: str):
+    def __init__(self, fp: str = '', url: str = ''):
         super().__init__() 
 
         self.text = ""
@@ -82,7 +82,7 @@ class Parser(HTMLParser):
             "game_winning_goals": None,
         }
 
-        name_match = re.search(r"Full Name:\s*([A-Za-zÀ-ÖØ-öø-ÿ' -]+)", self.text)
+        name_match = re.search(r"Full Name:\s*([A-Za-zÀ-ÖØ-öø-ÿ'. -]+)", self.text)
         if name_match is None:
             return None
         data['player_name'] = name_match.group(1).strip()
@@ -143,7 +143,13 @@ def process_file(relative_url: str, file_path: str) -> Optional[PLAYER_DATA]:
     return parser.process_file()
 
 
+def windows_to_macos_path(windows_path: str):
+    if not windows_path:
+        return windows_path
 
+    macos_path = windows_path.replace('\\', '/')
+    
+    return macos_path
     
 
 
@@ -166,7 +172,7 @@ def parse_downloaded_stuff(count_files: int | None = None):
                 continue
             print(f"[{idx}/{total_files}] Processing {data['file_path']}...")
 
-            player = process_file(data['download_url'], data['file_path'])
+            player = process_file(data['download_url'], windows_to_macos_path(data['file_path']))
             if player is None:
                 print(f"  ⚠️ Skipped {data['file_path']} (player=None)")
                 continue
@@ -181,8 +187,4 @@ def parse_downloaded_stuff(count_files: int | None = None):
         print("No player data found.")
         return
 
-    out_path = os.path.join(PROCESSED_DIR, 'data.tsv')
-    with open(out_path, 'w', encoding='UTF-8', newline='') as outfile:
-        writer = csv.DictWriter(outfile, fieldnames=players_data[0].keys(), delimiter='\t')
-        writer.writeheader()
-        writer.writerows(players_data)
+    return players_data
