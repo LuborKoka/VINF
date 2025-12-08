@@ -6,7 +6,6 @@ import logging
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import udf, col, size
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, FloatType, MapType, DoubleType
-import pandas as pd
 from parser import process_file
 
 
